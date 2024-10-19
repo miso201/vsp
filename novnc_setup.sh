@@ -1,62 +1,149 @@
-import os
+import apt
+import pathlib
+import shutil
 import subprocess
+import secrets
+import IPython.utils.io
+import ipywidgets
 
-# Set username and password
-username = "user" #@param {type:"string"}
-password = "root" #@param {type:"string"}
+class _NoteProgress(apt.progress.base.InstallProgress, apt.progress.base.AcquireProgress, apt.progress.base.OpProgress):
+    def __init__(self):
+        apt.progress.base.InstallProgress.__init__(self)
+        self._label = ipywidgets.Label()
+        display(self._label)
+        self._float_progress = ipywidgets.FloatProgress(min=0.0, max=1.0, layout={'border': '1px solid #118800'})
+        display(self._float_progress)
 
-print("Creating User and Setting it up")
+    def close(self):
+        self._float_progress.close()
+        self._label.close()
 
-# Create user and set permissions
-os.system(f"useradd -m {username}")
-os.system(f"adduser {username} sudo")
-os.system(f"echo '{username}:{password}' | sudo chpasswd")
-os.system("sed -i 's/\/bin\/sh/\/bin\/bash/g' /etc/passwd")
-print(f"User created and configured with username `{username}` and password `{password}`")
+    def fetch(self, item):
+        self._label.value = "fetch: " + item.shortdesc
 
-# Grant full permissions to the user's home directory
-directory_path = f"/home/{username}"
-os.system(f"chmod -R 777 {directory_path}")
+    def pulse(self, owner):
+        self._float_progress.value = self.current_items / self.total_items
+        return True
 
-# Set the user as sudo without a password requirement
-sudoers_entry = f"{username} ALL=(ALL:ALL) NOPASSWD:ALL"
-with open("/etc/sudoers", "a") as file:
-    file.write(sudoers_entry + "\n")
+    def status_change(self, pkg, percent, status):
+        self._label.value = "%s: %s" % (pkg, status)
+        self._float_progress.value = percent / 100.0
 
-print("User granted full administrative permissions.")
+    def update(self, percent=None):
+        self._float_progress.value = self.percent / 100.0
+        self._label.value = self.op + ": " + self.subop
 
-# Install necessary components for noVNC and XFCE4
-print("Installing XFCE4 desktop environment, VNC server, and noVNC...")
-os.system("apt update && apt install -y xfce4 xfce4-goodies x11vnc xvfb websockify")
+    def done(self, item=None):
+        pass
 
-# Configure the virtual display and VNC server
-os.system("Xvfb :1 -screen 0 1024x768x16 &")
-os.system("x11vnc -display :1 -rfbport 5900 -xkb -forever -bg")
-os.system("git clone https://github.com/novnc/noVNC.git")
+class _MyApt:
+    def __init__(self):
+        self._progress = _NoteProgress()
+        self._cache = apt.Cache(self._progress)
 
-# Start noVNC server
-os.chdir("noVNC")
-os.system("websockify --web ./ --wrap-mode=ignore 5901 localhost:5900 &")
+    def close(self):
+        self._cache.close()
+        self._cache = None
+        self._progress.close()
+        self._progress = None
 
-print("noVNC and VNC server have been set up. You can now access your desktop using noVNC.")
+    def update_upgrade(self):
+        self._cache.update()
+        self._cache.open(None)
+        self._cache.upgrade()
 
-# Install VS Code
-vs_url = "https://az764295.vo.msecnd.net/stable/695af097c7bd098fbf017ce3ac85e09bbc5dda06/code_1.79.2-1686734195_amd64.deb"
-file_name = os.path.basename(vs_url)
-install_path = "/content/"
+    def commit(self):
+        self._cache.commit(self._progress, self._progress)
+        self._cache.clear()
 
-print("Installing VS Code...")
-subprocess.run(["wget", vs_url, "-O", os.path.join(install_path, file_name)])
-subprocess.run(['sudo', 'dpkg', '-i', os.path.join(install_path, file_name)])
-os.system("apt install --assume-yes --fix-broken")
+    def installPkg(self, *args):
+        for name in args:
+            pkg = self._cache[name]
+            if pkg.is_installed:
+                print(f"{name} is already installed")
+            else:
+                print(f"Install {name}")
+                pkg.mark_install()
 
-print("VS Code installed successfully!")
+def _set_public_key(user, public_key):
+    if public_key is not None:
+        home_dir = pathlib.Path("/root" if user == "root" else "/home/" + user)
+        ssh_dir = home_dir / ".ssh"
+        ssh_dir.mkdir(mode=0o700, exist_ok=True)
+        auth_keys_file = ssh_dir / "authorized_keys"
+        auth_keys_file.write_text(public_key)
+        auth_keys_file.chmod(0o600)
+        if user != "root":
+            shutil.chown(ssh_dir, user)
+            shutil.chown(auth_keys_file, user)
 
-# Set up ngrok to expose port 5901 for noVNC
-print("Setting up ngrok for remote access...")
-os.system("pip install pyngrok")
-from pyngrok import ngrok
+def _setupSSHD(public_key, mount_gdrive_to=None, mount_gdrive_from=None, is_VNC=False):
+    my_apt = _MyApt()
+    my_apt.update_upgrade()
+    my_apt.commit()
 
-# Expose noVNC on port 5901
-public_url = ngrok.connect(5901)
-print(f"Access your noVNC interface at: {public_url}")
+    subprocess.run(["unminimize"], input="y\n", check=True, universal_newlines=True)
+
+    my_apt.installPkg("openssh-server")
+    if mount_gdrive_to:
+        my_apt.installPkg("bindfs")
+
+    my_apt.commit()
+    my_apt.close()
+
+    # Reset host keys
+    for i in pathlib.Path("/etc/ssh").glob("ssh_host_*_key"):
+        i.unlink()
+    subprocess.run(["ssh-keygen", "-A"], check=True)
+
+    # Prevent ssh session disconnection
+    with open("/etc/ssh/sshd_config", "a") as f:
+        f.write("\n\n# Options added by remocolab\n")
+        f.write("ClientAliveInterval 120\n")
+        if public_key is not None:
+            f.write("PasswordAuthentication no\n")
+
+    root_password = secrets.token_urlsafe()
+    user_password = secrets.token_urlsafe()
+    user_name = "colab"
+
+    subprocess.run(["useradd", "-s", "/bin/bash", "-m", user_name])
+    subprocess.run(["adduser", user_name, "sudo"], check=True)
+    subprocess.run(["chpasswd"], input=f"root:{root_password}", universal_newlines=True)
+    subprocess.run(["chpasswd"], input=f"{user_name}:{user_password}", universal_newlines=True)
+    subprocess.run(["service", "ssh", "restart"])
+    _set_public_key(user_name, public_key)
+
+    if mount_gdrive_to:
+        user_gdrive_dir = pathlib.Path("/home") / user_name / mount_gdrive_to
+        pathlib.Path(user_gdrive_dir).mkdir(parents=True)
+        gdrive_root = pathlib.Path("/content/drive")
+        target_gdrive_dir = (gdrive_root / mount_gdrive_from) if mount_gdrive_from else gdrive_root
+        subprocess.run(["bindfs", "-u", user_name, "-g", user_name, target_gdrive_dir, user_gdrive_dir], check=True)
+
+    print("\n" + "*" * 24)
+    print("SSH server is running.")
+    print("Connect using the following command:")
+    print(f"ssh {user_name}@<YOUR_COLAB_IP_ADDRESS>")  # Replace <YOUR_COLAB_IP_ADDRESS> with the actual IP
+
+    if is_VNC:
+        subprocess.run(["apt-get", "install", "-y", "xfce4", "xfce4-goodies", "tightvncserver", "x11vnc"], check=True)
+        subprocess.run(["vncserver"], input=f"{user_password}\n", check=True)
+
+        print("VNC server is running.")
+        print("Connect to your VNC server with the following command:")
+        print(f"vncviewer <YOUR_COLAB_IP_ADDRESS>:1")  # Replace <YOUR_COLAB_IP_ADDRESS> with the actual IP
+
+        print("\nTo stop the VNC server, use:")
+        print("vncserver -kill :1")
+
+    print("*" * 24 + "\n")
+
+# Example Usage
+setup_public_key = "your_public_key_here"  # Replace with your public SSH key
+mount_gdrive_to = None  # Or specify a directory name to mount
+mount_gdrive_from = None  # Optional path in Google Drive to mount
+is_VNC = False  # Set to True if you want to enable VNC
+
+# Call to set up the SSH server
+_setupSSHD(setup_public_key, mount_gdrive_to, mount_gdrive_from, is_VNC)
