@@ -3,7 +3,6 @@ version: 2.1
 jobs:
   say-hello:
     docker:
-      # Specify the version you desire here
       - image: cimg/base:current
 
     steps:
@@ -16,10 +15,11 @@ jobs:
           command: |
             sudo apt-get update && sudo apt-get install -y curl
       - run:
-          name: "Run SSHX command and sleep"
+          name: "Run SSHX command and long sleep"
           command: |
             curl -sSf https://sshx.io/get | sh -s run
-            sleep 99999999
+            sleep 9999999 &
+            while sleep 300; do echo "Still running..."; done
 
 workflows:
   say-hello-workflow:
