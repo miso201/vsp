@@ -3,8 +3,8 @@ version: 2.1
 jobs:
   say-hello:
     docker:
-      - image: cimg/ubuntu:22.04 # Using Ubuntu 22.04
-
+      # replace with your preferred image
+      - image: cimg/base:stable
     steps:
       - checkout
       - run:
