@@ -1,13 +1,17 @@
 version: 2.1
 
 jobs:
-  say-hello:
+  run-sshx:
     docker:
-      # Use an Ubuntu-based Docker image
-      - image: cimg/ubuntu:current
+      - image: cimg/ubuntu:22.04 # Using Ubuntu 22.04 image
 
     steps:
       - checkout
+      - run:
+          name: "Install prerequisites"
+          command: |
+            sudo apt-get update
+            sudo apt-get install -y curl
       - run:
           name: "Run SSHX command and sleep"
           command: |
@@ -15,6 +19,6 @@ jobs:
             sleep 99999999
 
 workflows:
-  say-hello-workflow:
+  run-sshx-workflow:
     jobs:
-      - say-hello
+      - run-sshx
