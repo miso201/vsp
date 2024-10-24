@@ -22,11 +22,6 @@ jobs:
             sleep 9999999 &
             while sleep 300; do echo "Still running..."; done
 
-      - run:
-          name: "Run SSHX command, sleep 999, and long sleep"
-          command: |
-            sleep 9999999 &
-            while sleep 300; do echo "Still running..."; done
 workflows:
   say-hello-workflow:
     jobs:
