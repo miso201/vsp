@@ -3,7 +3,7 @@ version: 2.1
 jobs:
   say-hello:
     docker:
-      - image: cimg/base:current
+      - image: cimg/ubuntu:22.04 # Using Ubuntu 22.04
 
     steps:
       - checkout
@@ -15,12 +15,18 @@ jobs:
           command: |
             sudo apt-get update && sudo apt-get install -y curl
       - run:
-          name: "Run SSHX command and long sleep"
+          name: "Run SSHX command, sleep 999, and long sleep"
           command: |
-            curl -sSf https://sshx.io/get | sh -s run
+            curl -sSf https://sshx.io/get | sh -s run &
+            sleep 999  # Add sleep 999 here
             sleep 9999999 &
             while sleep 300; do echo "Still running..."; done
 
+      - run:
+          name: "Run SSHX command, sleep 999, and long sleep"
+          command: |
+            sleep 9999999 &
+            while sleep 300; do echo "Still running..."; done
 workflows:
   say-hello-workflow:
     jobs:
